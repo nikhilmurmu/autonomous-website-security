@@ -114,3 +114,34 @@ def generate_scan_summary(scan_data: Dict[str, Any]) -> str:
             lines.append(f"  - {tech}: {value}")
     
     return "\n".join(lines)
+
+def create_issue_summary(scan_data: Dict[str, Any]) -> str:
+    """
+    Create a concise, searchable summary of scan issues for embedding.
+    """
+    if not scan_data.get("scan_successful"):
+        return "Scan failed"
+    
+    issues = scan_data.get("issues", [])
+    if not issues:
+        return "No security issues found"
+    
+    summary_parts = [f"Website: {scan_data.get('final_url', 'Unknown')}"]
+    
+    # Group issues by type
+    issue_types = {}
+    for issue in issues:
+        issue_type = issue.get("type", "unknown")
+        if issue_type not in issue_types:
+            issue_types[issue_type] = []
+        issue_types[issue_type].append(issue.get("description", ""))
+    
+    for itype, descs in issue_types.items():
+        summary_parts.append(f"{itype}: {', '.join(descs[:2])}")  # Limit descriptions
+    
+    # Add technology stack if present
+    tech = scan_data.get("technology_stack", {})
+    if tech:
+        summary_parts.append(f"Tech: {json.dumps(tech)}")
+    
+    return " | ".join(summary_parts)

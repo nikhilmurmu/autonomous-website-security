@@ -1,4 +1,5 @@
 import json
+import re
 import os
 import shutil
 from datetime import datetime
@@ -9,53 +10,115 @@ from loguru import logger
 from config.settings import CLIENTS_DIR
 
 @tool("Generate Fix Plan")
-def generate_fix_plan_tool(issue_description: str, technology: str) -> str:
+def generate_fix_plan_tool(issue_description: str, technology: str = "Web Application", context: str = "") -> str:
     """
-    Generate a structured fix plan for a security issue.
-    In production, this would use the LLM to generate actual code.
-    Here we return a template that the LLM agent can expand.
+    Generate a structured fix plan for a security issue, optionally incorporating context from past similar fixes.
+    
+    Args:
+        issue_description: Detailed description of the security issue.
+        technology: Technology stack (e.g., "WordPress", "PHP", "Nginx").
+        context: Optional string containing past similar fixes and their solutions.
+    
+    Returns:
+        JSON string containing the fix plan.
     """
     logger.info(f"Generating fix plan for: {issue_description[:50]}...")
+    if context:
+        logger.info("Context from past fixes provided")
     
     plan = {
         "issue": issue_description,
         "technology": technology,
+        "context_used": bool(context),
+        "past_context_summary": context[:500] if context else None,
         "recommended_action": None,
         "steps": [],
         "code_changes": [],
+        "commands": [],
         "testing_needed": []
     }
     
-    # Pre-defined plans for common issues
+    # Use context to influence the plan (simple rule-based for now; in production, LLM would use it)
     if "missing_header" in issue_description.lower():
-        header = issue_description.split(":")[-1].strip()
+        # Extract specific header if mentioned
+        import re
+        header_match = re.search(r'Missing security header:?\s*([\w-]+)', issue_description, re.IGNORECASE)
+        header_name = header_match.group(1) if header_match else "Security-Header"
+        
         plan["recommended_action"] = "add_security_header"
         plan["steps"] = [
             "Locate web server configuration file (.htaccess, nginx.conf, or web.config)",
-            f"Add header directive for {header}",
-            "Restart web server"
+            f"Add header directive for {header_name}",
+            "Restart web server to apply changes"
         ]
         plan["code_changes"] = [
             {
                 "file": ".htaccess (Apache)",
-                "content": f'Header always set {header} "..."'
+                "content": f'Header always set {header_name} "..."'
+            },
+            {
+                "file": "nginx.conf",
+                "content": f'add_header {header_name} "...";'
             }
         ]
-        plan["testing_needed"] = ["Verify header present in response", "Check site functionality"]
+        plan["testing_needed"] = [
+            f"Verify {header_name} appears in response headers",
+            "Test website functionality remains intact"
+        ]
+        
+        # If context contains past solutions, we could extract specific values
+        if context and header_name in context:
+            # In a real implementation, the LLM would parse the context
+            plan["notes"] = "Past similar fix found in memory; consider reusing configuration values."
     
-    elif "wordpress" in issue_description.lower() and "version" in issue_description.lower():
+    elif "wordpress" in issue_description.lower() or "wp" in issue_description.lower():
         plan["recommended_action"] = "update_wordpress"
         plan["steps"] = [
-            "Create full backup",
-            "Update WordPress core via admin or WP-CLI",
+            "Create full backup (files + database)",
+            "Update WordPress core to latest version",
             "Update all plugins and themes",
             "Test critical functionality"
         ]
-        plan["commands"] = ["wp core update", "wp plugin update --all", "wp theme update --all"]
+        plan["commands"] = [
+            "wp core update",
+            "wp plugin update --all",
+            "wp theme update --all"
+        ]
+        plan["testing_needed"] = [
+            "Verify admin dashboard accessible",
+            "Test key user flows (login, checkout, forms)"
+        ]
+    
+    elif "ssl" in issue_description.lower() or "tls" in issue_description.lower():
+        plan["recommended_action"] = "renew_ssl_certificate"
+        plan["steps"] = [
+            "Verify certificate expiration date",
+            "Renew certificate with CA (Let's Encrypt or commercial)",
+            "Install new certificate on web server",
+            "Restart web server"
+        ]
+        plan["commands"] = [
+            "certbot renew --dry-run",
+            "certbot renew --force-renewal"
+        ]
+        plan["testing_needed"] = [
+            "Check SSL Labs rating",
+            "Verify HTTPS works across browsers"
+        ]
     
     else:
         plan["recommended_action"] = "manual_review"
-        plan["steps"] = ["Analyze issue manually", "Consult security documentation"]
+        plan["steps"] = [
+            "Analyze issue manually with security team",
+            "Consult security documentation and CVE databases"
+        ]
+        if context:
+            plan["steps"].append("Review past similar fixes provided in context")
+        plan["notes"] = "No automated fix template available; human analysis required."
+    
+    # If context is provided, add a flag that the LLM should consider it
+    if context:
+        plan["llm_instruction"] = "Use the past_context_summary to inform and improve this fix plan."
     
     return json.dumps(plan, indent=2)
 
