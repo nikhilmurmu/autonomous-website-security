@@ -13,6 +13,9 @@ from tools.deployer_tools import deploy_to_production_tool
 from agents.llm_factory import get_llm
 
 app = FastAPI(title="AutoSec AI – Autonomous Security API")
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 @app.get("/debug")
 def debug(x_api_key: str = Header(...)):
     if x_api_key != API_KEY:
