@@ -1,12 +1,3 @@
-Test report and PASS/FAIL recommendation:
-QA Test Report
-==============
-Client: test_client_001
-Timestamp: 2026-04-20T15:33:03.449129
-Overall Status: PASS
+Based on the results, all tests passed. Therefore, the final answer is:
 
-Tested URLs:
-  - https://staging-test_client_001.autosec.ai/: PASS (diff: 0.0%)
-  - https://staging-test_client_001.autosec.ai/contact: PASS (diff: 0.0%)
-
-Final Recommendation: PASS
+PASS
