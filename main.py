@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, HTTPException, Header, Query
 from pydantic import BaseModel
 from typing import Optional
@@ -12,6 +13,15 @@ from tools.deployer_tools import deploy_to_production_tool
 from agents.llm_factory import get_llm
 
 app = FastAPI(title="AutoSec AI – Autonomous Security API")
+@app.get("/debug")
+def debug(x_api_key: str = Header(...)):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+    groq_key = os.getenv("GROQ_API_KEY")
+    return {
+        "groq_key_set": groq_key is not None,
+        "groq_key_preview": (groq_key[:10] + "...") if groq_key else "NOT SET"
+    }
 
 # Simple API key – replace with a real secret in production
 API_KEY = "autosec-secret-2026"
