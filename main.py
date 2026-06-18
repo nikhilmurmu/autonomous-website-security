@@ -18,6 +18,13 @@ from tools.deployer_tools import deploy_to_production_tool
 app = FastAPI(title="AutoSec AI – Autonomous Security API")
 API_KEY = "autosec-secret-2026"
 
+from fastapi.responses import HTMLResponse
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def serve_dashboard():
+    with open("dashboard.html", "r", encoding="utf-8") as f:
+        return f.read()
+
 # Stripe setup
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
