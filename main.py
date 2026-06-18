@@ -1,23 +1,29 @@
-from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
-from pydantic import BaseModel
-from typing import Dict
+import os
 import json
 import uuid
+import re
 import threading
 from datetime import datetime
+from typing import Dict
 
-from tools.scanner_direct import scan_website_direct, generate_scan_summary, create_issue_summary
+from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
+from pydantic import BaseModel
+from groq import Groq
+
+from tools.scanner_direct import scan_website_direct, generate_scan_summary
 from tools.qa_tools import visual_regression_test_tool
 from tools.deployer_tools import deploy_to_production_tool
-from agents.llm_factory import get_llm
 
 app = FastAPI(title="AutoSec AI – Autonomous Security API")
-
 API_KEY = "autosec-secret-2026"
 
-# In‑memory job store (lighter without ChromaDB)
+# In‑memory job store
 jobs: Dict[str, dict] = {}
 job_lock = threading.Lock()
+
+# Lightweight Groq client (no CrewAI)
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+GROQ_MODEL = "llama-3.1-8b-instant"
 
 class ScanRequest(BaseModel):
     url: str
@@ -29,14 +35,23 @@ class ScanResponse(BaseModel):
     status: str
     message: str
 
+def call_groq(prompt: str) -> str:
+    """Minimal Groq API call – replace CrewAI LLM."""
+    completion = groq_client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.1,
+        max_tokens=1024
+    )
+    return completion.choices[0].message.content
+
 def run_scan_background(job_id: str, request: ScanRequest):
-    """Process a scan in the background – no ChromaDB memory to save RAM."""
     try:
+        # 1. Scan
         scan_result = scan_website_direct(request.url)
         scan_summary = generate_scan_summary(scan_result)
-        # No memory lookup – keep it simple for free tier
 
-        llm = get_llm()
+        # 2. Generate fix plan via Groq (lightweight)
         prompt = f"""
 A security scan of {request.url} found these issues:
 {scan_summary}
@@ -45,8 +60,7 @@ Generate a concise fix plan in JSON with fields: issue_type, recommended_action,
 Return ONLY the JSON object, no other text.
 """
         try:
-            llm_response = llm.call(prompt)
-            import re
+            llm_response = call_groq(prompt)
             json_match = re.search(r'\{.*\}', llm_response, re.DOTALL)
             if json_match:
                 fix_plan = json.loads(json_match.group(0))
@@ -55,6 +69,7 @@ Return ONLY the JSON object, no other text.
         except Exception as e:
             fix_plan = {"error": str(e)}
 
+        # 3. QA
         qa_result = visual_regression_test_tool.run(
             client_id=request.client_id,
             urls_to_test=[request.url]
@@ -65,6 +80,7 @@ Return ONLY the JSON object, no other text.
         except:
             qa_status = "fail"
 
+        # 4. Deploy
         if qa_status == "pass" and request.auto_approve:
             deploy_to_production_tool.run(
                 client_id=request.client_id,
@@ -122,18 +138,8 @@ def get_results(job_id: str, x_api_key: str = Header(...)):
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
-@app.get("/debug")
-def debug(x_api_key: str = Header(...)):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API key")
-    groq_key = __import__('os').getenv("GROQ_API_KEY")
-    return {
-        "groq_key_set": groq_key is not None,
-        "groq_key_preview": (groq_key[:10] + "...") if groq_key else "NOT SET"
-    }
 @app.post("/test-scan")
 def test_scan(request: ScanRequest, x_api_key: str = Header(...)):
-    """Synchronous test endpoint – returns result or error immediately."""
     if x_api_key != API_KEY:
         raise HTTPException(status_code=403, detail="Invalid API key")
     try:
@@ -141,3 +147,13 @@ def test_scan(request: ScanRequest, x_api_key: str = Header(...)):
         return {"success": True, "issues_found": len(scan_result.get("issues", []))}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+@app.get("/debug")
+def debug(x_api_key: str = Header(...)):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+    groq_key = os.getenv("GROQ_API_KEY")
+    return {
+        "groq_key_set": groq_key is not None,
+        "groq_key_preview": (groq_key[:10] + "...") if groq_key else "NOT SET"
+    }
