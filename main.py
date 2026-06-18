@@ -131,3 +131,13 @@ def debug(x_api_key: str = Header(...)):
         "groq_key_set": groq_key is not None,
         "groq_key_preview": (groq_key[:10] + "...") if groq_key else "NOT SET"
     }
+@app.post("/test-scan")
+def test_scan(request: ScanRequest, x_api_key: str = Header(...)):
+    """Synchronous test endpoint – returns result or error immediately."""
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+    try:
+        scan_result = scan_website_direct(request.url)
+        return {"success": True, "issues_found": len(scan_result.get("issues", []))}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
