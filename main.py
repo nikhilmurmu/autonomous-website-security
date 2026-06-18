@@ -6,9 +6,10 @@ import threading
 from datetime import datetime
 from typing import Dict
 
-from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Request
 from pydantic import BaseModel
 from groq import Groq
+import stripe
 
 from tools.scanner_direct import scan_website_direct, generate_scan_summary
 from tools.qa_tools import visual_regression_test_tool
@@ -17,9 +18,17 @@ from tools.deployer_tools import deploy_to_production_tool
 app = FastAPI(title="AutoSec AI – Autonomous Security API")
 API_KEY = "autosec-secret-2026"
 
-# In‑memory job store
+# Stripe setup
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+
+# In‑memory job store for scan results
 jobs: Dict[str, dict] = {}
 job_lock = threading.Lock()
+
+# In‑memory subscription store
+subscriptions: Dict[str, dict] = {}
+subscription_lock = threading.Lock()
 
 # Lightweight Groq client (no CrewAI)
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -36,7 +45,7 @@ class ScanResponse(BaseModel):
     message: str
 
 def call_groq(prompt: str) -> str:
-    """Minimal Groq API call – replace CrewAI LLM."""
+    """Minimal Groq API call."""
     completion = groq_client.chat.completions.create(
         model=GROQ_MODEL,
         messages=[{"role": "user", "content": prompt}],
@@ -51,7 +60,7 @@ def run_scan_background(job_id: str, request: ScanRequest):
         scan_result = scan_website_direct(request.url)
         scan_summary = generate_scan_summary(scan_result)
 
-        # 2. Generate fix plan via Groq (lightweight)
+        # 2. Fix plan via Groq
         prompt = f"""
 A security scan of {request.url} found these issues:
 {scan_summary}
@@ -110,6 +119,9 @@ Return ONLY the JSON object, no other text.
     with job_lock:
         jobs[job_id] = result
 
+# -------------------------------------------------------------------
+# Health, root, debug
+# -------------------------------------------------------------------
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -118,10 +130,23 @@ def health():
 def root():
     return {"service": "AutoSec AI", "status": "running"}
 
+@app.get("/debug")
+def debug(x_api_key: str = Header(...)):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=403)
+    groq_key = os.getenv("GROQ_API_KEY")
+    return {
+        "groq_key_set": groq_key is not None,
+        "groq_key_preview": (groq_key[:10] + "...") if groq_key else "NOT SET"
+    }
+
+# -------------------------------------------------------------------
+# Scan endpoints (async)
+# -------------------------------------------------------------------
 @app.post("/scan", response_model=ScanResponse)
 def run_scan(request: ScanRequest, background_tasks: BackgroundTasks, x_api_key: str = Header(...)):
     if x_api_key != API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API key")
+        raise HTTPException(status_code=403)
     job_id = str(uuid.uuid4())
     with job_lock:
         jobs[job_id] = {"status": "processing"}
@@ -131,7 +156,7 @@ def run_scan(request: ScanRequest, background_tasks: BackgroundTasks, x_api_key:
 @app.get("/results/{job_id}")
 def get_results(job_id: str, x_api_key: str = Header(...)):
     if x_api_key != API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API key")
+        raise HTTPException(status_code=403)
     with job_lock:
         job = jobs.get(job_id)
     if job is None:
@@ -141,19 +166,68 @@ def get_results(job_id: str, x_api_key: str = Header(...)):
 @app.post("/test-scan")
 def test_scan(request: ScanRequest, x_api_key: str = Header(...)):
     if x_api_key != API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API key")
+        raise HTTPException(status_code=403)
     try:
         scan_result = scan_website_direct(request.url)
         return {"success": True, "issues_found": len(scan_result.get("issues", []))}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-@app.get("/debug")
-def debug(x_api_key: str = Header(...)):
+# -------------------------------------------------------------------
+# Stripe subscription endpoints
+# -------------------------------------------------------------------
+@app.post("/subscribe")
+def create_subscription(request: Request, plan: str = "pro", x_api_key: str = Header(...)):
     if x_api_key != API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API key")
-    groq_key = os.getenv("GROQ_API_KEY")
-    return {
-        "groq_key_set": groq_key is not None,
-        "groq_key_preview": (groq_key[:10] + "...") if groq_key else "NOT SET"
-    }
+        raise HTTPException(status_code=403)
+    # Create a Stripe Checkout Session
+    session = stripe.checkout.Session.create(
+        payment_method_types=["card"],
+        mode="subscription",
+        line_items=[{
+            "price_data": {
+                "currency": "gbp",
+                "product_data": {"name": f"AutoSec {plan.capitalize()} Plan"},
+                "recurring": {"interval": "month"},
+                "unit_amount": 4900 if plan == "pro" else 1900,  # £49/mo for Pro
+            },
+            "quantity": 1,
+        }],
+        success_url="https://autonomous-website-security.onrender.com/success",
+        cancel_url="https://autonomous-website-security.onrender.com/cancel",
+    )
+    return {"checkout_url": session.url}
+
+@app.post("/stripe-webhook")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, STRIPE_WEBHOOK_SECRET
+        )
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    except stripe.error.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Invalid signature")
+    
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        client_id = session.get("client_reference_id") or session.get("customer")
+        with subscription_lock:
+            subscriptions[client_id or "unknown"] = {
+                "status": "active",
+                "plan": session.get("metadata", {}).get("plan", "pro"),
+                "subscription_id": session.get("subscription"),
+                "customer_id": session["customer"],
+                "started_at": datetime.now().isoformat()
+            }
+    return {"status": "received"}
+
+@app.get("/success")
+def success():
+    return {"message": "Subscription activated! Thank you."}
+
+@app.get("/cancel")
+def cancel():
+    return {"message": "Subscription cancelled."}
