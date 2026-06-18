@@ -1,13 +1,12 @@
 from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
 from pydantic import BaseModel
-from typing import Optional, Dict
+from typing import Dict
 import json
 import uuid
 import threading
 from datetime import datetime
 
 from tools.scanner_direct import scan_website_direct, generate_scan_summary, create_issue_summary
-from memory.vector_store import get_memory_store
 from tools.qa_tools import visual_regression_test_tool
 from tools.deployer_tools import deploy_to_production_tool
 from agents.llm_factory import get_llm
@@ -16,7 +15,7 @@ app = FastAPI(title="AutoSec AI – Autonomous Security API")
 
 API_KEY = "autosec-secret-2026"
 
-# In‑memory job store (replace with Redis/DB in production)
+# In‑memory job store (lighter without ChromaDB)
 jobs: Dict[str, dict] = {}
 job_lock = threading.Lock()
 
@@ -31,27 +30,16 @@ class ScanResponse(BaseModel):
     message: str
 
 def run_scan_background(job_id: str, request: ScanRequest):
-    """Process a scan in the background and store the result."""
+    """Process a scan in the background – no ChromaDB memory to save RAM."""
     try:
         scan_result = scan_website_direct(request.url)
         scan_summary = generate_scan_summary(scan_result)
-        issue_summary = create_issue_summary(scan_result)
-
-        memory = get_memory_store()
-        similar_fixes = memory.find_similar_fixes(issue_summary, n_results=2)
-        context_text = ""
-        if similar_fixes:
-            for fix in similar_fixes:
-                plan = fix['fix_plan']
-                context_text += f"Past fix: {plan.get('recommended_action')}\n"
+        # No memory lookup – keep it simple for free tier
 
         llm = get_llm()
         prompt = f"""
 A security scan of {request.url} found these issues:
 {scan_summary}
-
-Memory context (past fixes):
-{context_text}
 
 Generate a concise fix plan in JSON with fields: issue_type, recommended_action, steps (list), and estimated_time.
 Return ONLY the JSON object, no other text.
@@ -78,7 +66,7 @@ Return ONLY the JSON object, no other text.
             qa_status = "fail"
 
         if qa_status == "pass" and request.auto_approve:
-            deploy_result = deploy_to_production_tool.run(
+            deploy_to_production_tool.run(
                 client_id=request.client_id,
                 deployment_package="api_fix_package"
             )
@@ -87,12 +75,6 @@ Return ONLY the JSON object, no other text.
             deploy_status = "pending_approval"
         else:
             deploy_status = "skipped_due_to_qa_fail"
-
-        memory.store_fix(
-            issue_summary=issue_summary,
-            fix_plan=fix_plan,
-            metadata={"client_id": request.client_id, "url": request.url, "timestamp": datetime.now().isoformat()}
-        )
 
         result = {
             "status": "completed",
