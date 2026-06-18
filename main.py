@@ -176,11 +176,9 @@ def test_scan(request: ScanRequest, x_api_key: str = Header(...)):
 # -------------------------------------------------------------------
 # Stripe subscription endpoints
 # -------------------------------------------------------------------
-@app.post("/subscribe")
-def create_subscription(request: Request, plan: str = "pro", x_api_key: str = Header(...)):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=403)
-    # Create a Stripe Checkout Session
+@app.get("/subscribe")
+def create_subscription(plan: str = "pro"):
+    """Redirect to Stripe Checkout for the selected plan."""
     session = stripe.checkout.Session.create(
         payment_method_types=["card"],
         mode="subscription",
