@@ -1,315 +1,483 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AutoSec AI – Autonomous Security Dashboard</title>
-    <style>
-        :root {
-            --bg: #0a0e14;
-            --surface: #131820;
-            --surface2: #1a202c;
-            --primary: #00f0ff;
-            --accent: #b200ff;
-            --success: #00e676;
-            --warning: #ffab40;
-            --danger: #ff5252;
-            --text: #e0e0e0;
-            --text-muted: #8892a4;
-            --border: #2a3340;
-            --radius: 12px;
-        }
-        * { margin:0; padding:0; box-sizing:border-box; }
-        body {
-            background: var(--bg);
-            color: var(--text);
-            font-family: 'Inter', system-ui, -apple-system, sans-serif;
-            line-height: 1.6;
-            min-height: 100vh;
-        }
-        .container { max-width: 1280px; margin:0 auto; padding: 2rem; }
-        header {
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 1.5rem 2rem; background: var(--surface);
-            border-bottom: 1px solid var(--border);
-        }
-        .logo {
-            font-size: 1.5rem; font-weight: 700; color: var(--primary);
-            letter-spacing: -0.5px;
-        }
-        .logo span { color: var(--accent); }
-        .nav-links { display: flex; gap: 2rem; }
-        .nav-links a { color: var(--text-muted); text-decoration: none; font-weight: 500; transition: color 0.2s; }
-        .nav-links a:hover, .nav-links a.active { color: var(--primary); }
-        .grid { display: grid; gap: 1.5rem; }
-        .grid-2 { grid-template-columns: 1fr 1fr; }
-        .grid-3 { grid-template-columns: repeat(3, 1fr); }
-        .card {
-            background: var(--surface); border: 1px solid var(--border);
-            border-radius: var(--radius); padding: 1.5rem;
-            transition: border-color 0.2s;
-        }
-        .card:hover { border-color: var(--primary); }
-        .card-header {
-            display: flex; align-items: center; gap: 0.75rem;
-            margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;
-            text-transform: uppercase; letter-spacing: 0.5px;
-        }
-        .card-header i { font-style: normal; font-size: 1.2rem; }
-        .metric {
-            font-size: 2.5rem; font-weight: 700;
-            background: linear-gradient(135deg, var(--primary), var(--accent));
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-        .status-badge {
-            display: inline-flex; align-items: center; gap: 0.5rem;
-            padding: 0.3rem 0.8rem; border-radius: 50px; font-weight: 600;
-            font-size: 0.85rem;
-        }
-        .status-pass { background: rgba(0,230,118,0.15); color: var(--success); }
-        .status-fail { background: rgba(255,82,82,0.15); color: var(--danger); }
-        .status-pending { background: rgba(255,171,64,0.15); color: var(--warning); }
-        .btn {
-            padding: 0.7rem 1.5rem; border-radius: 8px; border: none;
-            font-weight: 600; cursor: pointer; transition: all 0.2s;
-            font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;
-        }
-        .btn-primary {
-            background: linear-gradient(135deg, var(--primary), var(--accent));
-            color: var(--bg);
-        }
-        .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
-        .btn-outline {
-            background: transparent; border: 1px solid var(--primary);
-            color: var(--primary);
-        }
-        .btn-outline:hover { background: rgba(0,240,255,0.1); }
-        input, select {
-            background: var(--surface2); border: 1px solid var(--border);
-            color: var(--text); padding: 0.7rem 1rem; border-radius: 8px;
-            width: 100%; font-size: 0.95rem; outline: none; transition: border-color 0.2s;
-        }
-        input:focus, select:focus { border-color: var(--primary); }
-        .form-group { margin-bottom: 1rem; }
-        .form-group label { display: block; margin-bottom: 0.4rem; color: var(--text-muted); font-weight: 500; }
-        .fix-item {
-            background: var(--surface2); border-radius: 8px; padding: 1rem;
-            margin-bottom: 0.75rem; border-left: 3px solid var(--primary);
-        }
-        .fix-item h4 { margin-bottom: 0.5rem; color: var(--primary); }
-        .fix-item p { color: var(--text-muted); font-size: 0.9rem; }
-        .progress-bar {
-            height: 6px; background: var(--border); border-radius: 3px;
-            overflow: hidden; margin-top: 0.75rem;
-        }
-        .progress-fill {
-            height: 100%; background: linear-gradient(90deg, var(--primary), var(--accent));
-            border-radius: 3px; animation: shimmer 2s infinite;
-        }
-        @keyframes shimmer {
-            0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; }
-        }
-        .loading-spinner {
-            display: inline-block; width: 20px; height: 20px;
-            border: 3px solid var(--border); border-top-color: var(--primary);
-            border-radius: 50%; animation: spin 1s linear infinite;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .footer {
-            margin-top: 3rem; padding: 1.5rem 2rem; text-align: center;
-            color: var(--text-muted); border-top: 1px solid var(--border);
-        }
-        @media (max-width: 768px) {
-            .grid-2, .grid-3 { grid-template-columns: 1fr; }
-            header { flex-direction: column; gap: 1rem; }
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutoSec AI – Autonomous Security Dashboard</title>
+<style>
+    :root {
+        --bg: #0a0e14;
+        --surface: #131820;
+        --surface2: #1a202c;
+        --primary: #00f0ff;
+        --accent: #b200ff;
+        --success: #00e676;
+        --warning: #ffab40;
+        --danger: #ff5252;
+        --text: #e0e0e0;
+        --text-muted: #8892a4;
+        --border: #2a3340;
+        --radius: 12px;
+    }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        line-height: 1.6;
+        min-height: 100vh;
+    }
+    .container { max-width: 1280px; margin:0 auto; padding: 2rem; }
+    header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 1.5rem 2rem; background: var(--surface);
+        border-bottom: 1px solid var(--border);
+    }
+    .logo { font-size: 1.5rem; font-weight: 700; color: var(--primary); letter-spacing: -0.5px; }
+    .logo span { color: var(--accent); }
+    .nav-links { display: flex; gap: 2rem; align-items: center; }
+    .nav-links a, .nav-links button {
+        color: var(--text-muted); text-decoration: none; font-weight: 500; transition: color 0.2s;
+        background: none; border: none; cursor: pointer; font-size: 1rem;
+    }
+    .nav-links a:hover, .nav-links button:hover, .nav-links a.active { color: var(--primary); }
+    .grid { display: grid; gap: 1.5rem; }
+    .grid-2 { grid-template-columns: 1fr 1fr; }
+    .grid-3 { grid-template-columns: repeat(3, 1fr); }
+    .card {
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 1.5rem;
+        transition: border-color 0.2s;
+    }
+    .card:hover { border-color: var(--primary); }
+    .card-header {
+        display: flex; align-items: center; gap: 0.75rem;
+        margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;
+        text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .metric {
+        font-size: 2.5rem; font-weight: 700;
+        background: linear-gradient(135deg, var(--primary), var(--accent));
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    .status-badge {
+        display: inline-flex; align-items: center; gap: 0.5rem;
+        padding: 0.3rem 0.8rem; border-radius: 50px; font-weight: 600; font-size: 0.85rem;
+    }
+    .status-pass { background: rgba(0,230,118,0.15); color: var(--success); }
+    .status-fail { background: rgba(255,82,82,0.15); color: var(--danger); }
+    .status-pending { background: rgba(255,171,64,0.15); color: var(--warning); }
+    .btn {
+        padding: 0.7rem 1.5rem; border-radius: 8px; border: none;
+        font-weight: 600; cursor: pointer; transition: all 0.2s;
+        font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .btn-primary { background: linear-gradient(135deg, var(--primary), var(--accent)); color: var(--bg); }
+    .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
+    .btn-outline { background: transparent; border: 1px solid var(--primary); color: var(--primary); }
+    .btn-outline:hover { background: rgba(0,240,255,0.1); }
+    input, select {
+        background: var(--surface2); border: 1px solid var(--border);
+        color: var(--text); padding: 0.7rem 1rem; border-radius: 8px;
+        width: 100%; font-size: 0.95rem; outline: none; transition: border-color 0.2s;
+    }
+    input:focus, select:focus { border-color: var(--primary); }
+    .form-group { margin-bottom: 1rem; }
+    .form-group label { display: block; margin-bottom: 0.4rem; color: var(--text-muted); font-weight: 500; }
+    .fix-item {
+        background: var(--surface2); border-radius: 8px; padding: 1rem;
+        margin-bottom: 0.75rem; border-left: 3px solid var(--primary);
+    }
+    .fix-item h4 { margin-bottom: 0.5rem; color: var(--primary); }
+    .fix-item p { color: var(--text-muted); font-size: 0.9rem; }
+    .progress-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 0.75rem; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, var(--primary), var(--accent)); border-radius: 3px; animation: shimmer 2s infinite; }
+    @keyframes shimmer { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
+    .loading-spinner { display: inline-block; width: 20px; height: 20px; border: 3px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .footer { margin-top: 3rem; padding: 1.5rem 2rem; text-align: center; color: var(--text-muted); border-top: 1px solid var(--border); }
+    .api-key-box { background: var(--surface2); padding: 1rem; border-radius: 8px; display: flex; align-items: center; gap: 1rem; margin: 1rem 0; }
+    .api-key-box code { flex:1; word-break: break-all; color: var(--primary); font-size: 0.9rem; }
+    .hidden { display: none; }
+    .table { width: 100%; border-collapse: collapse; }
+    .table th, .table td { padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
+    .table th { color: var(--text-muted); font-weight: 600; }
+    @media (max-width: 768px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } header { flex-direction: column; gap: 1rem; } }
+</style>
 </head>
 <body>
-    <header>
-        <div class="logo">AutoSec<span>AI</span></div>
-        <nav class="nav-links">
-            <a href="#" class="active">Dashboard</a>
-            <a href="#">Scans</a>
-            <a href="#">Billing</a>
-            <a href="#">Settings</a>
-        </nav>
-    </header>
 
-    <div class="container">
-        <!-- Stats Row -->
-        <div class="grid grid-3" style="margin-bottom: 2rem;">
-            <div class="card">
-                <div class="card-header">🔍 Total Scans</div>
-                <div class="metric" id="totalScans">—</div>
-            </div>
-            <div class="card">
-                <div class="card-header">🛡️ Fixes Applied</div>
-                <div class="metric" id="fixesApplied">—</div>
-            </div>
-            <div class="card">
-                <div class="card-header">⏱️ Uptime</div>
-                <div class="metric" id="uptime">—</div>
-            </div>
+<!-- Header -->
+<header>
+    <div class="logo">AutoSec<span>AI</span></div>
+    <nav class="nav-links" id="navLinks">
+        <a href="#" onclick="showSection('loginSection')" id="navLogin">Login</a>
+        <a href="#" onclick="showSection('signupSection')" id="navSignup">Sign Up</a>
+        <a href="#" onclick="showSection('dashboardSection')" id="navDashboard" class="hidden">Dashboard</a>
+        <a href="#" onclick="showSection('settingsSection')" id="navSettings" class="hidden">Settings</a>
+        <button onclick="logout()" id="navLogout" class="hidden">Logout</button>
+    </nav>
+</header>
+
+<div class="container">
+
+<!-- ===== LOGIN SECTION ===== -->
+<section id="loginSection">
+    <div class="card" style="max-width: 500px; margin: 3rem auto;">
+        <div class="card-header">🔐 Login to AutoSec AI</div>
+        <div class="form-group">
+            <label>Email</label>
+            <input type="email" id="loginEmail" placeholder="you@example.com">
         </div>
-
-        <!-- Scan Form + Latest Result -->
-        <div class="grid grid-2">
-            <div class="card">
-                <div class="card-header">🔎 Run Security Scan</div>
-                <div class="form-group">
-                    <label>Website URL</label>
-                    <input type="text" id="urlInput" placeholder="https://example.com" value="https://example.com">
-                </div>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="autoApprove" checked> Auto-approve deployment
-                    </label>
-                </div>
-                <button class="btn btn-primary" onclick="startScan()" id="scanBtn">
-                    Start Scan
-                </button>
-                <div id="scanStatus" style="margin-top: 1rem;"></div>
-            </div>
-
-            <div class="card">
-                <div class="card-header">📊 Latest Scan Result</div>
-                <div id="latestResult">
-                    <p style="color: var(--text-muted);">No scan results yet. Start a scan to see results.</p>
-                </div>
-                <div id="loadingArea" style="display:none; margin-top:1rem;">
-                    <span class="loading-spinner"></span> Scanning...
-                    <div class="progress-bar"><div class="progress-fill" style="width:60%;"></div></div>
-                </div>
-            </div>
+        <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="loginPassword" placeholder="Your password">
         </div>
+        <button class="btn btn-primary" onclick="login()" style="width:100%;">Login</button>
+        <p style="margin-top:1rem; text-align:center;">Don't have an account? <a href="#" onclick="showSection('signupSection')" style="color:var(--primary);">Sign Up</a></p>
+    </div>
+</section>
 
-        <!-- Fix Plan (populated dynamically) -->
-        <div id="fixPlanArea" style="display:none; margin-top: 2rem;">
-            <div class="card">
-                <div class="card-header">📋 Fix Plan</div>
-                <div id="fixPlanContent"></div>
+<!-- ===== SIGNUP SECTION ===== -->
+<section id="signupSection" class="hidden">
+    <div class="card" style="max-width: 500px; margin: 3rem auto;">
+        <div class="card-header">🚀 Create Your Account</div>
+        <div class="form-group">
+            <label>Email</label>
+            <input type="email" id="signupEmail" placeholder="you@example.com">
+        </div>
+        <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="signupPassword" placeholder="Choose a strong password">
+        </div>
+        <button class="btn btn-primary" onclick="signup()" style="width:100%;">Create Account</button>
+        <p style="margin-top:1rem; text-align:center;">Already have an account? <a href="#" onclick="showSection('loginSection')" style="color:var(--primary);">Login</a></p>
+    </div>
+</section>
+
+<!-- ===== DASHBOARD SECTION ===== -->
+<section id="dashboardSection" class="hidden">
+    <!-- Stats Row -->
+    <div class="grid grid-3" style="margin-bottom: 2rem;">
+        <div class="card">
+            <div class="card-header">🔍 Total Scans</div>
+            <div class="metric" id="totalScans">0</div>
+        </div>
+        <div class="card">
+            <div class="card-header">🛡️ Issues Fixed</div>
+            <div class="metric" id="issuesFixed">0</div>
+        </div>
+        <div class="card">
+            <div class="card-header">⏱️ Uptime</div>
+            <div class="metric">24/7</div>
+        </div>
+    </div>
+
+    <!-- Scan Form + Latest Result -->
+    <div class="grid grid-2">
+        <div class="card">
+            <div class="card-header">🔎 Run New Scan</div>
+            <div class="form-group">
+                <label>Website URL</label>
+                <input type="text" id="urlInput" placeholder="https://example.com" value="https://example.com">
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="autoApprove" checked> Auto-approve deployment
+                </label>
+            </div>
+            <button class="btn btn-primary" onclick="startScan()" id="scanBtn">Start Scan</button>
+            <div id="scanStatus" style="margin-top: 1rem;"></div>
+        </div>
+        <div class="card">
+            <div class="card-header">📊 Latest Scan Result</div>
+            <div id="latestResult">
+                <p style="color: var(--text-muted);">No scan results yet. Start a scan to see results.</p>
+            </div>
+            <div id="loadingArea" style="display:none; margin-top:1rem;">
+                <span class="loading-spinner"></span> Scanning...
+                <div class="progress-bar"><div class="progress-fill" style="width:60%;"></div></div>
             </div>
         </div>
     </div>
 
-    <div class="footer">
-        AutoSec AI – Autonomous Security System &copy; 2026
+    <!-- Fix Plan -->
+    <div id="fixPlanArea" style="display:none; margin-top: 2rem;">
+        <div class="card">
+            <div class="card-header">📋 Fix Plan</div>
+            <div id="fixPlanContent"></div>
+        </div>
     </div>
 
-    <script>
-        const API_BASE = "https://autonomous-website-security.onrender.com";
-        const API_KEY = "autosec-secret-2026";
+    <!-- Scan History -->
+    <div class="card" style="margin-top: 2rem;">
+        <div class="card-header">📜 Recent Scans</div>
+        <table class="table">
+            <thead>
+                <tr><th>Job ID</th><th>Status</th><th>Date</th></tr>
+            </thead>
+            <tbody id="scanHistoryBody">
+                <tr><td colspan="3" style="color:var(--text-muted);">No scans yet.</td></tr>
+            </tbody>
+        </table>
+    </div>
+</section>
 
-        // Fetch stats on load
-        async function loadStats() {
-            try {
-                const resp = await fetch(`${API_BASE}/health`);
-                if (resp.ok) {
-                    document.getElementById('uptime').textContent = '24/7';
-                }
-            } catch(e) {
-                document.getElementById('uptime').textContent = 'Offline';
-            }
-            // Simulated stats (you can add real endpoints)
-            document.getElementById('totalScans').textContent = '24';
-            document.getElementById('fixesApplied').textContent = '18';
+<!-- ===== SETTINGS SECTION ===== -->
+<section id="settingsSection" class="hidden">
+    <div class="card" style="max-width: 600px; margin: 3rem auto;">
+        <div class="card-header">⚙️ Account Settings</div>
+        <div class="form-group">
+            <label>Your API Key</label>
+            <div class="api-key-box">
+                <code id="apiKeyDisplay">Loading...</code>
+                <button class="btn btn-outline" onclick="copyApiKey()">Copy</button>
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.85rem;">Use this key in the <code>x-api-key</code> header to access the API directly.</p>
+        </div>
+        <div class="form-group">
+            <label>Plan</label>
+            <p id="planDisplay" style="color: var(--primary);">Free</p>
+            <a href="/subscribe?plan=pro" class="btn btn-primary" style="display:inline-block; margin-top:0.5rem;">Upgrade to Pro</a>
+        </div>
+    </div>
+</section>
+
+</div>
+
+<div class="footer">AutoSec AI – Autonomous Security System &copy; 2026</div>
+
+<script>
+const API_BASE = "https://autonomous-website-security.onrender.com";
+let authToken = null;
+let userApiKey = null;
+
+// ---- Section Navigation ----
+function showSection(sectionId) {
+    document.querySelectorAll('section').forEach(s => s.classList.add('hidden'));
+    document.getElementById(sectionId).classList.remove('hidden');
+    updateNav(sectionId);
+}
+
+function updateNav(activeSection) {
+    document.getElementById('navLogin').classList.toggle('hidden', activeSection === 'dashboardSection' || activeSection === 'settingsSection');
+    document.getElementById('navSignup').classList.toggle('hidden', activeSection === 'dashboardSection' || activeSection === 'settingsSection');
+    document.getElementById('navDashboard').classList.toggle('hidden', activeSection !== 'dashboardSection' && activeSection !== 'settingsSection');
+    document.getElementById('navSettings').classList.toggle('hidden', activeSection !== 'dashboardSection' && activeSection !== 'settingsSection');
+    document.getElementById('navLogout').classList.toggle('hidden', activeSection !== 'dashboardSection' && activeSection !== 'settingsSection');
+}
+
+// ---- Auth ----
+async function signup() {
+    const email = document.getElementById('signupEmail').value.trim();
+    const password = document.getElementById('signupPassword').value.trim();
+    if (!email || !password) return alert('Please fill in all fields.');
+
+    const formData = new FormData();
+    formData.append('email', email);
+    formData.append('password', password);
+
+    try {
+        const resp = await fetch(`${API_BASE}/signup`, { method: 'POST', body: formData });
+        const data = await resp.json();
+        if (resp.ok) {
+            alert('Account created! Your API key: ' + data.api_key);
+            document.getElementById('loginEmail').value = email;
+            document.getElementById('loginPassword').value = '';
+            showSection('loginSection');
+        } else {
+            alert('Error: ' + (data.detail || 'Signup failed'));
         }
-        loadStats();
+    } catch(e) {
+        alert('Connection error: ' + e.message);
+    }
+}
 
-        async function startScan() {
-            const url = document.getElementById('urlInput').value.trim();
-            if (!url) return alert('Please enter a URL');
+async function login() {
+    const email = document.getElementById('loginEmail').value.trim();
+    const password = document.getElementById('loginPassword').value.trim();
+    if (!email || !password) return alert('Please fill in all fields.');
 
-            document.getElementById('scanBtn').disabled = true;
-            document.getElementById('scanStatus').innerHTML = '<span class="loading-spinner"></span> Starting scan...';
-            document.getElementById('latestResult').innerHTML = '';
-            document.getElementById('loadingArea').style.display = 'block';
-            document.getElementById('fixPlanArea').style.display = 'none';
+    const formData = new FormData();
+    formData.append('email', email);
+    formData.append('password', password);
 
-            try {
-                const resp = await fetch(`${API_BASE}/scan`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
-                    body: JSON.stringify({
-                        url: url,
-                        auto_approve: document.getElementById('autoApprove').checked
-                    })
-                });
-                const data = await resp.json();
-                document.getElementById('scanStatus').innerHTML = `✅ Scan started. Job ID: ${data.job_id}`;
-                pollResults(data.job_id);
-            } catch(e) {
-                document.getElementById('scanStatus').innerHTML = `❌ Error: ${e.message}`;
+    try {
+        const resp = await fetch(`${API_BASE}/login`, { method: 'POST', body: formData });
+        const data = await resp.json();
+        if (resp.ok) {
+            authToken = data.access_token;
+            userApiKey = data.api_key;
+            localStorage.setItem('autosec_token', authToken);
+            localStorage.setItem('autosec_api_key', userApiKey);
+            document.getElementById('apiKeyDisplay').textContent = userApiKey;
+            document.getElementById('planDisplay').textContent = 'Free';
+            showSection('dashboardSection');
+            loadDashboardData();
+        } else {
+            alert('Invalid credentials');
+        }
+    } catch(e) {
+        alert('Connection error: ' + e.message);
+    }
+}
+
+function logout() {
+    authToken = null;
+    userApiKey = null;
+    localStorage.removeItem('autosec_token');
+    localStorage.removeItem('autosec_api_key');
+    showSection('loginSection');
+}
+
+// ---- Persist session on page load ----
+window.addEventListener('load', () => {
+    const savedToken = localStorage.getItem('autosec_token');
+    const savedApiKey = localStorage.getItem('autosec_api_key');
+    if (savedToken && savedApiKey) {
+        authToken = savedToken;
+        userApiKey = savedApiKey;
+        document.getElementById('apiKeyDisplay').textContent = userApiKey;
+        document.getElementById('planDisplay').textContent = 'Free';
+        showSection('dashboardSection');
+        loadDashboardData();
+    } else {
+        showSection('loginSection');
+    }
+});
+
+// ---- Dashboard ----
+async function loadDashboardData() {
+    // Load scan history
+    try {
+        const resp = await fetch(`${API_BASE}/recent-scans`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        const scans = await resp.json();
+        const tbody = document.getElementById('scanHistoryBody');
+        document.getElementById('totalScans').textContent = scans.length;
+        let issuesFixed = 0;
+        if (scans.length > 0) {
+            tbody.innerHTML = scans.map(s => {
+                const statusClass = s.status === 'completed' ? 'status-pass' : s.status === 'failed' ? 'status-fail' : 'status-pending';
+                if (s.status === 'completed') issuesFixed += 1;
+                return `<tr>
+                    <td><code>${s.job_id}</code></td>
+                    <td><span class="status-badge ${statusClass}">${s.status.toUpperCase()}</span></td>
+                    <td>${s.created_at ? new Date(s.created_at).toLocaleString() : 'N/A'}</td>
+                </tr>`;
+            }).join('');
+        } else {
+            tbody.innerHTML = '<tr><td colspan="3" style="color:var(--text-muted);">No scans yet.</td></tr>';
+        }
+        document.getElementById('issuesFixed').textContent = issuesFixed;
+    } catch(e) {
+        console.error('Failed to load scan history', e);
+    }
+}
+
+async function startScan() {
+    const url = document.getElementById('urlInput').value.trim();
+    if (!url) return alert('Please enter a URL');
+    if (!authToken) return alert('Please login first');
+
+    document.getElementById('scanBtn').disabled = true;
+    document.getElementById('scanStatus').innerHTML = '<span class="loading-spinner"></span> Starting scan...';
+    document.getElementById('latestResult').innerHTML = '';
+    document.getElementById('loadingArea').style.display = 'block';
+    document.getElementById('fixPlanArea').style.display = 'none';
+
+    try {
+        const resp = await fetch(`${API_BASE}/scan`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+                url: url,
+                auto_approve: document.getElementById('autoApprove').checked
+            })
+        });
+        const data = await resp.json();
+        document.getElementById('scanStatus').innerHTML = `✅ Scan started. Job ID: ${data.job_id}`;
+        pollResults(data.job_id);
+    } catch(e) {
+        document.getElementById('scanStatus').innerHTML = `❌ Error: ${e.message}`;
+        document.getElementById('scanBtn').disabled = false;
+        document.getElementById('loadingArea').style.display = 'none';
+    }
+}
+
+async function pollResults(jobId) {
+    const maxAttempts = 15;
+    for (let i = 0; i < maxAttempts; i++) {
+        await new Promise(r => setTimeout(r, 4000));
+        try {
+            const resp = await fetch(`${API_BASE}/results/${jobId}`, {
+                headers: { 'Authorization': `Bearer ${authToken}` }
+            });
+            const result = await resp.json();
+            if (result.status === 'completed') {
+                displayResult(result);
                 document.getElementById('scanBtn').disabled = false;
                 document.getElementById('loadingArea').style.display = 'none';
+                loadDashboardData();
+                return;
+            } else if (result.status === 'failed') {
+                document.getElementById('latestResult').innerHTML = `<p style="color:var(--danger);">❌ Scan failed: ${result.error || 'Unknown error'}</p>`;
+                document.getElementById('scanBtn').disabled = false;
+                document.getElementById('loadingArea').style.display = 'none';
+                loadDashboardData();
+                return;
             }
-        }
+        } catch(e) { /* keep polling */ }
+    }
+    document.getElementById('latestResult').innerHTML = '<p style="color:var(--warning);">⚠️ Scan timed out. Try again later.</p>';
+    document.getElementById('scanBtn').disabled = false;
+    document.getElementById('loadingArea').style.display = 'none';
+    loadDashboardData();
+}
 
-        async function pollResults(jobId) {
-            const maxAttempts = 15;
-            for (let i = 0; i < maxAttempts; i++) {
-                await new Promise(r => setTimeout(r, 4000));
-                try {
-                    const resp = await fetch(`${API_BASE}/results/${jobId}`, {
-                        headers: { 'x-api-key': API_KEY }
-                    });
-                    const result = await resp.json();
-                    if (result.status === 'completed') {
-                        displayResult(result);
-                        document.getElementById('scanBtn').disabled = false;
-                        document.getElementById('loadingArea').style.display = 'none';
-                        return;
-                    } else if (result.status === 'failed') {
-                        document.getElementById('latestResult').innerHTML = `<p style="color:var(--danger);">❌ Scan failed: ${result.error || 'Unknown error'}</p>`;
-                        document.getElementById('scanBtn').disabled = false;
-                        document.getElementById('loadingArea').style.display = 'none';
-                        return;
-                    }
-                } catch(e) {
-                    // keep polling
-                }
-            }
-            document.getElementById('latestResult').innerHTML = '<p style="color:var(--warning);">⚠️ Scan timed out. Try again later.</p>';
-            document.getElementById('scanBtn').disabled = false;
-            document.getElementById('loadingArea').style.display = 'none';
-        }
-
-        function displayResult(result) {
-            const statusClass = result.qa_status === 'pass' ? 'status-pass' : 'status-fail';
-            const deployClass = result.deployment_status === 'deployed' ? 'status-pass' : 
-                                result.deployment_status === 'pending_approval' ? 'status-pending' : 'status-fail';
-
-            document.getElementById('latestResult').innerHTML = `
-                <div style="display:flex; gap:1rem; margin-bottom:1rem;">
-                    <span class="status-badge ${statusClass}">QA: ${result.qa_status.toUpperCase()}</span>
-                    <span class="status-badge ${deployClass}">Deploy: ${result.deployment_status.toUpperCase()}</span>
+function displayResult(result) {
+    const statusClass = result.qa_status === 'pass' ? 'status-pass' : 'status-fail';
+    const deployClass = result.deployment_status === 'deployed' ? 'status-pass' : 
+                        result.deployment_status === 'pending_approval' ? 'status-pending' : 'status-fail';
+    document.getElementById('latestResult').innerHTML = `
+        <div style="display:flex; gap:1rem; margin-bottom:1rem;">
+            <span class="status-badge ${statusClass}">QA: ${result.qa_status.toUpperCase()}</span>
+            <span class="status-badge ${deployClass}">Deploy: ${result.deployment_status.toUpperCase()}</span>
+        </div>
+        <p><strong>Issues Found:</strong> ${result.issues_found}</p>
+        <p><strong>URL:</strong> ${result.url}</p>
+        <p style="color:var(--text-muted); font-size:0.9rem;">${result.message}</p>
+    `;
+    if (result.fix_plan && result.fix_plan.issues) {
+        const fixPlanContent = document.getElementById('fixPlanContent');
+        fixPlanContent.innerHTML = '';
+        result.fix_plan.issues.forEach((issue, idx) => {
+            const steps = issue.steps.map(s => `<li>${s.step || s}</li>`).join('');
+            const estimated = issue.estimated_time || (issue.steps[0] && issue.steps[0].estimated_time) || 'N/A';
+            fixPlanContent.innerHTML += `
+                <div class="fix-item">
+                    <h4>${idx+1}. ${issue.recommended_action || issue.issue_type}</h4>
+                    <p>Severity: ${issue.issue_type}</p>
+                    <p>Estimated time: ${estimated}</p>
+                    <ul style="margin-top:0.5rem; padding-left:1.2rem;">${steps}</ul>
                 </div>
-                <p><strong>Issues Found:</strong> ${result.issues_found}</p>
-                <p><strong>URL:</strong> ${result.url}</p>
-                <p style="color:var(--text-muted); font-size:0.9rem;">${result.message}</p>
             `;
+        });
+        document.getElementById('fixPlanArea').style.display = 'block';
+    }
+}
 
-            // Show fix plan
-            if (result.fix_plan && result.fix_plan.issues) {
-                const fixPlanContent = document.getElementById('fixPlanContent');
-                fixPlanContent.innerHTML = '';
-                result.fix_plan.issues.forEach((issue, idx) => {
-                    const steps = issue.steps.map(s => `<li>${s.step || s}</li>`).join('');
-                    const estimated = issue.estimated_time || (issue.steps[0] && issue.steps[0].estimated_time) || 'N/A';
-                    fixPlanContent.innerHTML += `
-                        <div class="fix-item">
-                            <h4>${idx+1}. ${issue.recommended_action || issue.issue_type}</h4>
-                            <p>Severity: ${issue.issue_type}</p>
-                            <p>Estimated time: ${estimated}</p>
-                            <ul style="margin-top:0.5rem; padding-left:1.2rem;">${steps}</ul>
-                        </div>
-                    `;
-                });
-                document.getElementById('fixPlanArea').style.display = 'block';
-            }
-        }
-    </script>
+function copyApiKey() {
+    const key = document.getElementById('apiKeyDisplay').textContent;
+    if (key && key !== 'Loading...') {
+        navigator.clipboard.writeText(key).then(() => alert('API key copied!'));
+    }
+}
+</script>
 </body>
 </html>

@@ -4,72 +4,80 @@ import uuid
 import re
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Optional
 
-from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Request, Depends, Form
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from groq import Groq
 import stripe
+
+from passlib.context import CryptContext
+from jose import JWTError, jwt
 
 from tools.scanner_direct import scan_website_direct, generate_scan_summary
 from tools.qa_tools import visual_regression_test_tool
 from tools.deployer_tools import deploy_to_production_tool
 
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
 app = FastAPI(title="AutoSec AI – Autonomous Security API")
 
-API_KEY = "autosec-secret-2026"
+SECRET_KEY = os.getenv("SECRET_KEY", "autosec-super-secret-change-in-production")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 1 week
 
-# Stripe configuration
+ADMIN_API_KEY = "autosec-secret-2026"
+
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 
-# Lightweight Groq client
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 GROQ_MODEL = "llama-3.1-8b-instant"
 
 # ---------------------------------------------------------------------------
-# SQLite database setup
+# SQLite database
 # ---------------------------------------------------------------------------
 DB_PATH = "autosec.db"
 db_lock = threading.Lock()
 
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
 def get_db() -> sqlite3.Connection:
-    """Return a thread‑safe database connection."""
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
-    """Create tables if they don't already exist."""
     with db_lock:
         conn = get_db()
-        conn.execute("""
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                hashed_password TEXT NOT NULL,
+                api_key TEXT UNIQUE NOT NULL,
+                plan TEXT DEFAULT 'free',
+                created_at TEXT
+            );
             CREATE TABLE IF NOT EXISTS jobs (
                 job_id TEXT PRIMARY KEY,
+                user_id INTEGER,
                 status TEXT DEFAULT 'processing',
-                result_json TEXT
-            )
-        """)
-        conn.execute("""
+                result_json TEXT,
+                created_at TEXT
+            );
             CREATE TABLE IF NOT EXISTS subscriptions (
                 customer_id TEXT PRIMARY KEY,
+                user_id INTEGER,
                 status TEXT DEFAULT 'active',
                 plan TEXT DEFAULT 'pro',
                 subscription_id TEXT,
-                client_id TEXT,
-                api_key TEXT,
                 started_at TEXT
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS api_keys (
-                api_key TEXT PRIMARY KEY,
-                client_id TEXT NOT NULL,
-                plan TEXT DEFAULT 'pro',
-                created_at TEXT
-            )
+            );
         """)
         conn.commit()
         conn.close()
@@ -77,11 +85,44 @@ def init_db():
 init_db()
 
 # ---------------------------------------------------------------------------
+# Password & JWT helpers
+# ---------------------------------------------------------------------------
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(plain: str, hashed: str) -> bool:
+    return pwd_context.verify(plain, hashed)
+
+def create_access_token(data: dict) -> str:
+    to_encode = data.copy()
+    to_encode.update({"exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def get_user_by_email(email: str) -> Optional[dict]:
+    with db_lock:
+        conn = get_db()
+        row = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+        conn.close()
+    return dict(row) if row else None
+
+def get_user_by_api_key(api_key: str) -> Optional[dict]:
+    with db_lock:
+        conn = get_db()
+        row = conn.execute("SELECT * FROM users WHERE api_key = ?", (api_key,)).fetchone()
+        conn.close()
+    return dict(row) if row else None
+
+def authenticate_user(email: str, password: str) -> Optional[dict]:
+    user = get_user_by_email(email)
+    if not user or not verify_password(password, user["hashed_password"]):
+        return None
+    return user
+
+# ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
 class ScanRequest(BaseModel):
     url: str
-    client_id: str = "api-client"
     auto_approve: bool = True
 
 class ScanResponse(BaseModel):
@@ -93,7 +134,6 @@ class ScanResponse(BaseModel):
 # Helper functions
 # ---------------------------------------------------------------------------
 def call_groq(prompt: str) -> str:
-    """Minimal Groq API call."""
     completion = groq_client.chat.completions.create(
         model=GROQ_MODEL,
         messages=[{"role": "user", "content": prompt}],
@@ -102,12 +142,12 @@ def call_groq(prompt: str) -> str:
     )
     return completion.choices[0].message.content
 
-def save_job(job_id: str, status: str, result_json: Optional[str] = None):
+def save_job(job_id: str, user_id: int, status: str, result_json: Optional[str] = None):
     with db_lock:
         conn = get_db()
         conn.execute(
-            "INSERT OR REPLACE INTO jobs (job_id, status, result_json) VALUES (?, ?, ?)",
-            (job_id, status, result_json)
+            "INSERT OR REPLACE INTO jobs (job_id, user_id, status, result_json, created_at) VALUES (?, ?, ?, ?, ?)",
+            (job_id, user_id, status, result_json, datetime.utcnow().isoformat())
         )
         conn.commit()
         conn.close()
@@ -119,13 +159,22 @@ def load_job(job_id: str) -> Optional[dict]:
         conn.close()
     if row is None:
         return None
-    result = {"job_id": row["job_id"], "status": row["status"]}
+    result = {"job_id": row["job_id"], "user_id": row["user_id"], "status": row["status"]}
     if row["result_json"]:
         result.update(json.loads(row["result_json"]))
     return result
 
-def run_scan_background(job_id: str, request: ScanRequest):
-    """Process a security scan entirely in the background."""
+def get_user_jobs(user_id: int, limit: int = 20) -> list:
+    with db_lock:
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT job_id, status, created_at FROM jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+            (user_id, limit)
+        ).fetchall()
+        conn.close()
+    return [dict(r) for r in rows]
+
+def run_scan_background(job_id: str, user_id: int, request: ScanRequest):
     try:
         scan_result = scan_website_direct(request.url)
         scan_summary = generate_scan_summary(scan_result)
@@ -148,7 +197,7 @@ Return ONLY the JSON object, no other text.
             fix_plan = {"error": str(e)}
 
         qa_result = visual_regression_test_tool.run(
-            client_id=request.client_id,
+            client_id=str(user_id),
             urls_to_test=[request.url]
         )
         try:
@@ -159,7 +208,7 @@ Return ONLY the JSON object, no other text.
 
         if qa_status == "pass" and request.auto_approve:
             deploy_to_production_tool.run(
-                client_id=request.client_id,
+                client_id=str(user_id),
                 deployment_package="api_fix_package"
             )
             deploy_status = "deployed"
@@ -169,23 +218,102 @@ Return ONLY the JSON object, no other text.
             deploy_status = "skipped_due_to_qa_fail"
 
         result_data = {
-            "scan_id": f"scan_{datetime.now().timestamp()}",
-            "client_id": request.client_id,
+            "scan_id": f"scan_{datetime.utcnow().timestamp()}",
             "url": request.url,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.utcnow().isoformat(),
             "issues_found": len(scan_result.get("issues", [])),
             "fix_plan": fix_plan,
             "qa_status": qa_status,
             "deployment_status": deploy_status,
             "message": f"Scan completed. QA: {qa_status}. Deployment: {deploy_status}."
         }
-        save_job(job_id, "completed", json.dumps(result_data))
+        save_job(job_id, user_id, "completed", json.dumps(result_data))
     except Exception as e:
-        save_job(job_id, "failed", json.dumps({"error": str(e)}))
+        save_job(job_id, user_id, "failed", json.dumps({"error": str(e)}))
 
 # ---------------------------------------------------------------------------
-# Basic endpoints
+# Authentication endpoints
 # ---------------------------------------------------------------------------
+@app.post("/signup")
+def signup(email: str = Form(...), password: str = Form(...)):
+    if get_user_by_email(email):
+        raise HTTPException(status_code=400, detail="Email already registered")
+    api_key = f"as-{uuid.uuid4().hex[:24]}"
+    hashed_pw = hash_password(password)
+    with db_lock:
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO users (email, hashed_password, api_key, plan, created_at) VALUES (?, ?, ?, 'free', ?)",
+            (email, hashed_pw, api_key, datetime.utcnow().isoformat())
+        )
+        conn.commit()
+        conn.close()
+    return {"message": "Account created", "api_key": api_key}
+
+@app.post("/login")
+def login(email: str = Form(...), password: str = Form(...)):
+    user = authenticate_user(email, password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    access_token = create_access_token(data={"sub": str(user["id"])})
+    return {"access_token": access_token, "token_type": "bearer", "api_key": user["api_key"]}
+
+def get_current_user(authorization: str = Header(None)) -> dict:
+    """Extract user from JWT token in Authorization header."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    token = authorization.split(" ")[1]
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = int(payload.get("sub"))
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    with db_lock:
+        conn = get_db()
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        conn.close()
+    if not row:
+        raise HTTPException(status_code=401, detail="User not found")
+    return dict(row)
+
+# ---------------------------------------------------------------------------
+# Scan endpoints (user‑specific)
+# ---------------------------------------------------------------------------
+@app.post("/scan", response_model=ScanResponse)
+def run_scan(request: ScanRequest, background_tasks: BackgroundTasks, user: dict = Depends(get_current_user)):
+    job_id = str(uuid.uuid4())
+    save_job(job_id, user["id"], "processing")
+    background_tasks.add_task(run_scan_background, job_id, user["id"], request)
+    return ScanResponse(
+        job_id=job_id,
+        status="processing",
+        message="Scan started. Poll /results/{job_id} for the result."
+    )
+
+@app.get("/results/{job_id}")
+def get_results(job_id: str, user: dict = Depends(get_current_user)):
+    job = load_job(job_id)
+    if not job or job["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+@app.get("/recent-scans")
+def recent_scans(user: dict = Depends(get_current_user)):
+    return get_user_jobs(user["id"])
+
+# ---------------------------------------------------------------------------
+# Admin endpoints (keep for testing)
+# ---------------------------------------------------------------------------
+@app.post("/test-scan")
+def test_scan(request: ScanRequest, x_api_key: str = Header(...)):
+    if x_api_key != ADMIN_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+    try:
+        scan_result = scan_website_direct(request.url)
+        return {"success": True, "issues_found": len(scan_result.get("issues", []))}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -194,54 +322,8 @@ def health():
 def root():
     return {"service": "AutoSec AI", "status": "running"}
 
-@app.get("/debug")
-def debug(x_api_key: str = Header(...)):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API key")
-    groq_key = os.getenv("GROQ_API_KEY")
-    return {
-        "groq_key_set": groq_key is not None,
-        "groq_key_preview": (groq_key[:10] + "...") if groq_key else "NOT SET"
-    }
-
 # ---------------------------------------------------------------------------
-# Scan endpoints (async, persistent)
-# ---------------------------------------------------------------------------
-@app.post("/scan", response_model=ScanResponse)
-def run_scan(request: ScanRequest, background_tasks: BackgroundTasks,
-             x_api_key: str = Header(...)):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API key")
-    job_id = str(uuid.uuid4())
-    save_job(job_id, "processing")
-    background_tasks.add_task(run_scan_background, job_id, request)
-    return ScanResponse(
-        job_id=job_id,
-        status="processing",
-        message="Scan started. Poll /results/{job_id} for the result."
-    )
-
-@app.get("/results/{job_id}")
-def get_results(job_id: str, x_api_key: str = Header(...)):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API key")
-    job = load_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job
-
-@app.post("/test-scan")
-def test_scan(request: ScanRequest, x_api_key: str = Header(...)):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API key")
-    try:
-        scan_result = scan_website_direct(request.url)
-        return {"success": True, "issues_found": len(scan_result.get("issues", []))}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-# ---------------------------------------------------------------------------
-# Stripe subscription endpoints (persistent)
+# Stripe subscription endpoints (unchanged)
 # ---------------------------------------------------------------------------
 @app.get("/subscribe")
 def create_subscription(plan: str = "pro"):
@@ -257,8 +339,8 @@ def create_subscription(plan: str = "pro"):
             },
             "quantity": 1,
         }],
-        success_url="https://autonomous-website-security.onrender.com/success",
-        cancel_url="https://autonomous-website-security.onrender.com/cancel",
+        success_url="https://autonomous-website-security.onrender.com/dashboard",
+        cancel_url="https://autonomous-website-security.onrender.com/dashboard",
     )
     return RedirectResponse(session.url)
 
@@ -278,38 +360,20 @@ async def stripe_webhook(request: Request):
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
         customer_id = session["customer"]
-        client_id = session.get("client_reference_id") or customer_id
         plan = session.get("metadata", {}).get("plan", "pro")
         subscription_id = session.get("subscription")
-
-        # Generate a unique API key for this customer
-        user_api_key = f"as-{uuid.uuid4().hex[:24]}"
-
         with db_lock:
             conn = get_db()
             conn.execute(
-                "INSERT OR REPLACE INTO subscriptions (customer_id, status, plan, subscription_id, client_id, api_key, started_at) VALUES (?, 'active', ?, ?, ?, ?, ?)",
-                (customer_id, plan, subscription_id, client_id, user_api_key, datetime.now().isoformat())
-            )
-            conn.execute(
-                "INSERT OR REPLACE INTO api_keys (api_key, client_id, plan, created_at) VALUES (?, ?, ?, ?)",
-                (user_api_key, client_id, plan, datetime.now().isoformat())
+                "INSERT OR REPLACE INTO subscriptions (customer_id, status, plan, subscription_id, started_at) VALUES (?, 'active', ?, ?, ?)",
+                (customer_id, plan, subscription_id, datetime.utcnow().isoformat())
             )
             conn.commit()
             conn.close()
-
     return {"status": "received"}
 
-@app.get("/success")
-def success():
-    return {"message": "Subscription activated! Thank you."}
-
-@app.get("/cancel")
-def cancel():
-    return {"message": "Subscription cancelled."}
-
 # ---------------------------------------------------------------------------
-# Professional dashboard
+# Dashboard – serves the professional HTML
 # ---------------------------------------------------------------------------
 @app.get("/dashboard", response_class=HTMLResponse)
 async def serve_dashboard():
