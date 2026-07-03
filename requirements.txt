@@ -24,5 +24,6 @@ pyarrow
 botocore
 stripe
 python-jose[cryptography]
-passlib[bcrypt]
+
 python-multipart
+

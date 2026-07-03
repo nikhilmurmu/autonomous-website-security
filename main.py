@@ -4,14 +4,14 @@ import uuid
 import re
 import sqlite3
 import threading
+import hashlib
+import secrets
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Request, Form, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
-from passlib.context import CryptContext
 from jose import JWTError, jwt
 import stripe
 
@@ -32,7 +32,6 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 # Database
 DB_PATH = "autosec.db"
 db_lock = threading.Lock()
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -73,14 +72,24 @@ def init_db():
 init_db()
 
 # ---------------------------------------------------------------------------
-# Password & JWT helpers
+# Password helpers (hashlib instead of passlib)
 # ---------------------------------------------------------------------------
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    """Hash a password with SHA‑256 and a random salt."""
+    salt = secrets.token_hex(16)
+    return salt + ":" + hashlib.sha256((salt + password).encode()).hexdigest()
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    """Verify a password against a salted SHA‑256 hash."""
+    try:
+        salt, stored_hash = hashed.split(":", 1)
+        return hashlib.sha256((salt + plain).encode()).hexdigest() == stored_hash
+    except Exception:
+        return False
 
+# ---------------------------------------------------------------------------
+# JWT helpers
+# ---------------------------------------------------------------------------
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
     to_encode.update({"exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)})
@@ -90,13 +99,6 @@ def get_user_by_email(email: str) -> Optional[dict]:
     with db_lock:
         conn = get_db()
         row = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
-        conn.close()
-    return dict(row) if row else None
-
-def get_user_by_api_key(api_key: str) -> Optional[dict]:
-    with db_lock:
-        conn = get_db()
-        row = conn.execute("SELECT * FROM users WHERE api_key = ?", (api_key,)).fetchone()
         conn.close()
     return dict(row) if row else None
 
