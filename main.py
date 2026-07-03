@@ -7,43 +7,31 @@ import threading
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 
-from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Request, Depends, Form
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Request, Form, Depends
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
-from groq import Groq
-import stripe
-
 from passlib.context import CryptContext
 from jose import JWTError, jwt
-
-from tools.scanner_direct import scan_website_direct, generate_scan_summary
-from tools.qa_tools import visual_regression_test_tool
-from tools.deployer_tools import deploy_to_production_tool
+import stripe
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Lightweight startup – no heavy imports until needed
 # ---------------------------------------------------------------------------
 app = FastAPI(title="AutoSec AI – Autonomous Security API")
 
 SECRET_KEY = os.getenv("SECRET_KEY", "autosec-super-secret-change-in-production")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 1 week
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
 
 ADMIN_API_KEY = "autosec-secret-2026"
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-GROQ_MODEL = "llama-3.1-8b-instant"
-
-# ---------------------------------------------------------------------------
-# SQLite database
-# ---------------------------------------------------------------------------
+# Database
 DB_PATH = "autosec.db"
 db_lock = threading.Lock()
-
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def get_db() -> sqlite3.Connection:
@@ -119,6 +107,22 @@ def authenticate_user(email: str, password: str) -> Optional[dict]:
     return user
 
 # ---------------------------------------------------------------------------
+# Lazy imports for heavy tools (only loaded when scan endpoints are called)
+# ---------------------------------------------------------------------------
+_scan_deps_loaded = False
+_groq_client = None
+
+def _ensure_scan_deps():
+    global _scan_deps_loaded, _groq_client
+    if not _scan_deps_loaded:
+        from tools.scanner_direct import scan_website_direct, generate_scan_summary
+        from tools.qa_tools import visual_regression_test_tool
+        from tools.deployer_tools import deploy_to_production_tool
+        from groq import Groq
+        _groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+        _scan_deps_loaded = True
+
+# ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
 class ScanRequest(BaseModel):
@@ -131,17 +135,8 @@ class ScanResponse(BaseModel):
     message: str
 
 # ---------------------------------------------------------------------------
-# Helper functions
+# Background scan runner
 # ---------------------------------------------------------------------------
-def call_groq(prompt: str) -> str:
-    completion = groq_client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1,
-        max_tokens=1024
-    )
-    return completion.choices[0].message.content
-
 def save_job(job_id: str, user_id: int, status: str, result_json: Optional[str] = None):
     with db_lock:
         conn = get_db()
@@ -175,6 +170,11 @@ def get_user_jobs(user_id: int, limit: int = 20) -> list:
     return [dict(r) for r in rows]
 
 def run_scan_background(job_id: str, user_id: int, request: ScanRequest):
+    _ensure_scan_deps()
+    from tools.scanner_direct import scan_website_direct, generate_scan_summary
+    from tools.qa_tools import visual_regression_test_tool
+    from tools.deployer_tools import deploy_to_production_tool
+
     try:
         scan_result = scan_website_direct(request.url)
         scan_summary = generate_scan_summary(scan_result)
@@ -187,12 +187,18 @@ Generate a concise fix plan in JSON with fields: issue_type, recommended_action,
 Return ONLY the JSON object, no other text.
 """
         try:
-            llm_response = call_groq(prompt)
-            json_match = re.search(r'\{.*\}', llm_response, re.DOTALL)
+            llm_response = _groq_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=1024
+            )
+            llm_text = llm_response.choices[0].message.content
+            json_match = re.search(r'\{.*\}', llm_text, re.DOTALL)
             if json_match:
                 fix_plan = json.loads(json_match.group(0))
             else:
-                fix_plan = {"error": "LLM returned non‑JSON", "raw": llm_response[:200]}
+                fix_plan = {"error": "LLM returned non‑JSON", "raw": llm_text[:200]}
         except Exception as e:
             fix_plan = {"error": str(e)}
 
@@ -259,7 +265,6 @@ def login(email: str = Form(...), password: str = Form(...)):
     return {"access_token": access_token, "token_type": "bearer", "api_key": user["api_key"]}
 
 def get_current_user(authorization: str = Header(None)) -> dict:
-    """Extract user from JWT token in Authorization header."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated")
     token = authorization.split(" ")[1]
@@ -302,12 +307,14 @@ def recent_scans(user: dict = Depends(get_current_user)):
     return get_user_jobs(user["id"])
 
 # ---------------------------------------------------------------------------
-# Admin endpoints (keep for testing)
+# Admin / test endpoints
 # ---------------------------------------------------------------------------
 @app.post("/test-scan")
 def test_scan(request: ScanRequest, x_api_key: str = Header(...)):
     if x_api_key != ADMIN_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid API key")
+    _ensure_scan_deps()
+    from tools.scanner_direct import scan_website_direct
     try:
         scan_result = scan_website_direct(request.url)
         return {"success": True, "issues_found": len(scan_result.get("issues", []))}
@@ -323,7 +330,7 @@ def root():
     return {"service": "AutoSec AI", "status": "running"}
 
 # ---------------------------------------------------------------------------
-# Stripe subscription endpoints (unchanged)
+# Stripe
 # ---------------------------------------------------------------------------
 @app.get("/subscribe")
 def create_subscription(plan: str = "pro"):
@@ -356,7 +363,6 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid payload")
     except stripe.error.SignatureVerificationError:
         raise HTTPException(status_code=400, detail="Invalid signature")
-
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
         customer_id = session["customer"]
@@ -373,7 +379,7 @@ async def stripe_webhook(request: Request):
     return {"status": "received"}
 
 # ---------------------------------------------------------------------------
-# Dashboard – serves the professional HTML
+# Dashboard
 # ---------------------------------------------------------------------------
 @app.get("/dashboard", response_class=HTMLResponse)
 async def serve_dashboard():
