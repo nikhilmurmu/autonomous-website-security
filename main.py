@@ -2,9 +2,10 @@ import os
 import json
 import uuid
 import re
+import sqlite3
 import threading
 from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -24,17 +25,56 @@ API_KEY = "autosec-secret-2026"
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 
-# In‑memory job store for async scan results
-jobs: Dict[str, dict] = {}
-job_lock = threading.Lock()
-
-# In‑memory subscription store
-subscriptions: Dict[str, dict] = {}
-subscription_lock = threading.Lock()
-
-# Lightweight Groq client (no CrewAI)
+# Lightweight Groq client
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 GROQ_MODEL = "llama-3.1-8b-instant"
+
+# ---------------------------------------------------------------------------
+# SQLite database setup
+# ---------------------------------------------------------------------------
+DB_PATH = "autosec.db"
+db_lock = threading.Lock()
+
+def get_db() -> sqlite3.Connection:
+    """Return a thread‑safe database connection."""
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    """Create tables if they don't already exist."""
+    with db_lock:
+        conn = get_db()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS jobs (
+                job_id TEXT PRIMARY KEY,
+                status TEXT DEFAULT 'processing',
+                result_json TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                customer_id TEXT PRIMARY KEY,
+                status TEXT DEFAULT 'active',
+                plan TEXT DEFAULT 'pro',
+                subscription_id TEXT,
+                client_id TEXT,
+                api_key TEXT,
+                started_at TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_keys (
+                api_key TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                plan TEXT DEFAULT 'pro',
+                created_at TEXT
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+init_db()
 
 # ---------------------------------------------------------------------------
 # Pydantic models
@@ -53,7 +93,7 @@ class ScanResponse(BaseModel):
 # Helper functions
 # ---------------------------------------------------------------------------
 def call_groq(prompt: str) -> str:
-    """Minimal Groq API call – replaces CrewAI LLM."""
+    """Minimal Groq API call."""
     completion = groq_client.chat.completions.create(
         model=GROQ_MODEL,
         messages=[{"role": "user", "content": prompt}],
@@ -62,14 +102,34 @@ def call_groq(prompt: str) -> str:
     )
     return completion.choices[0].message.content
 
+def save_job(job_id: str, status: str, result_json: Optional[str] = None):
+    with db_lock:
+        conn = get_db()
+        conn.execute(
+            "INSERT OR REPLACE INTO jobs (job_id, status, result_json) VALUES (?, ?, ?)",
+            (job_id, status, result_json)
+        )
+        conn.commit()
+        conn.close()
+
+def load_job(job_id: str) -> Optional[dict]:
+    with db_lock:
+        conn = get_db()
+        row = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+        conn.close()
+    if row is None:
+        return None
+    result = {"job_id": row["job_id"], "status": row["status"]}
+    if row["result_json"]:
+        result.update(json.loads(row["result_json"]))
+    return result
+
 def run_scan_background(job_id: str, request: ScanRequest):
     """Process a security scan entirely in the background."""
     try:
-        # 1. Scan the website
         scan_result = scan_website_direct(request.url)
         scan_summary = generate_scan_summary(scan_result)
 
-        # 2. Generate fix plan via Groq
         prompt = f"""
 A security scan of {request.url} found these issues:
 {scan_summary}
@@ -87,7 +147,6 @@ Return ONLY the JSON object, no other text.
         except Exception as e:
             fix_plan = {"error": str(e)}
 
-        # 3. Visual regression test (QA)
         qa_result = visual_regression_test_tool.run(
             client_id=request.client_id,
             urls_to_test=[request.url]
@@ -98,7 +157,6 @@ Return ONLY the JSON object, no other text.
         except Exception:
             qa_status = "fail"
 
-        # 4. Deploy if QA passes
         if qa_status == "pass" and request.auto_approve:
             deploy_to_production_tool.run(
                 client_id=request.client_id,
@@ -110,8 +168,7 @@ Return ONLY the JSON object, no other text.
         else:
             deploy_status = "skipped_due_to_qa_fail"
 
-        result = {
-            "status": "completed",
+        result_data = {
             "scan_id": f"scan_{datetime.now().timestamp()}",
             "client_id": request.client_id,
             "url": request.url,
@@ -122,11 +179,9 @@ Return ONLY the JSON object, no other text.
             "deployment_status": deploy_status,
             "message": f"Scan completed. QA: {qa_status}. Deployment: {deploy_status}."
         }
+        save_job(job_id, "completed", json.dumps(result_data))
     except Exception as e:
-        result = {"status": "failed", "error": str(e)}
-
-    with job_lock:
-        jobs[job_id] = result
+        save_job(job_id, "failed", json.dumps({"error": str(e)}))
 
 # ---------------------------------------------------------------------------
 # Basic endpoints
@@ -150,7 +205,7 @@ def debug(x_api_key: str = Header(...)):
     }
 
 # ---------------------------------------------------------------------------
-# Scan endpoints (async)
+# Scan endpoints (async, persistent)
 # ---------------------------------------------------------------------------
 @app.post("/scan", response_model=ScanResponse)
 def run_scan(request: ScanRequest, background_tasks: BackgroundTasks,
@@ -158,8 +213,7 @@ def run_scan(request: ScanRequest, background_tasks: BackgroundTasks,
     if x_api_key != API_KEY:
         raise HTTPException(status_code=403, detail="Invalid API key")
     job_id = str(uuid.uuid4())
-    with job_lock:
-        jobs[job_id] = {"status": "processing"}
+    save_job(job_id, "processing")
     background_tasks.add_task(run_scan_background, job_id, request)
     return ScanResponse(
         job_id=job_id,
@@ -171,15 +225,13 @@ def run_scan(request: ScanRequest, background_tasks: BackgroundTasks,
 def get_results(job_id: str, x_api_key: str = Header(...)):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=403, detail="Invalid API key")
-    with job_lock:
-        job = jobs.get(job_id)
+    job = load_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
 @app.post("/test-scan")
 def test_scan(request: ScanRequest, x_api_key: str = Header(...)):
-    """Synchronous test endpoint – returns result immediately."""
     if x_api_key != API_KEY:
         raise HTTPException(status_code=403, detail="Invalid API key")
     try:
@@ -189,11 +241,10 @@ def test_scan(request: ScanRequest, x_api_key: str = Header(...)):
         return {"success": False, "error": str(e)}
 
 # ---------------------------------------------------------------------------
-# Stripe subscription endpoints
+# Stripe subscription endpoints (persistent)
 # ---------------------------------------------------------------------------
 @app.get("/subscribe")
 def create_subscription(plan: str = "pro"):
-    """Redirect to Stripe Checkout for the selected plan."""
     session = stripe.checkout.Session.create(
         payment_method_types=["card"],
         mode="subscription",
@@ -213,7 +264,6 @@ def create_subscription(plan: str = "pro"):
 
 @app.post("/stripe-webhook")
 async def stripe_webhook(request: Request):
-    """Handle Stripe webhook events."""
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
     try:
@@ -227,15 +277,27 @@ async def stripe_webhook(request: Request):
 
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
-        client_id = session.get("client_reference_id") or session.get("customer")
-        with subscription_lock:
-            subscriptions[client_id or "unknown"] = {
-                "status": "active",
-                "plan": session.get("metadata", {}).get("plan", "pro"),
-                "subscription_id": session.get("subscription"),
-                "customer_id": session["customer"],
-                "started_at": datetime.now().isoformat()
-            }
+        customer_id = session["customer"]
+        client_id = session.get("client_reference_id") or customer_id
+        plan = session.get("metadata", {}).get("plan", "pro")
+        subscription_id = session.get("subscription")
+
+        # Generate a unique API key for this customer
+        user_api_key = f"as-{uuid.uuid4().hex[:24]}"
+
+        with db_lock:
+            conn = get_db()
+            conn.execute(
+                "INSERT OR REPLACE INTO subscriptions (customer_id, status, plan, subscription_id, client_id, api_key, started_at) VALUES (?, 'active', ?, ?, ?, ?, ?)",
+                (customer_id, plan, subscription_id, client_id, user_api_key, datetime.now().isoformat())
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO api_keys (api_key, client_id, plan, created_at) VALUES (?, ?, ?, ?)",
+                (user_api_key, client_id, plan, datetime.now().isoformat())
+            )
+            conn.commit()
+            conn.close()
+
     return {"status": "received"}
 
 @app.get("/success")
